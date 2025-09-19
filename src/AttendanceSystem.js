@@ -637,7 +637,7 @@ const AttendanceSystem = () => {
                 <Lock size={32} color="white" />
               </div>
               <h1 style={{fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.5rem'}}>
-                账号IP绑定签到系统
+                乌兰察布项目公司签到系统
               </h1>
               <p style={{color: '#6b7280', marginTop: '0.5rem'}}>请使用授权账号登录</p>
             </div>
