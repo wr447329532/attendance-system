@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, Users, Download, Settings, CheckCircle2, XCircle, AlertCircle, LogOut, Edit, UserCheck, Shield, User, BarChart3, Plus, Trash2, UserPlus, Key, Wifi, Lock } from 'lucide-react';
+import { Calendar, Clock, Users, Download, CheckCircle2, XCircle, LogOut, Edit, UserCheck, Shield, BarChart3, Plus, Trash2, UserPlus, Key, Wifi, Lock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 const AttendanceSystem = () => {
@@ -74,7 +74,7 @@ const AttendanceSystem = () => {
     return savedRecords ? JSON.parse(savedRecords) : {};
   });
 
-  const [userIP, setUserIP] = useState('192.168.110.11');
+  const [userIP] = useState('192.168.110.11');;
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('info');
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
