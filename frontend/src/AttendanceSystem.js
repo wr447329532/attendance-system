@@ -21,13 +21,11 @@ const AttendanceSystem = () => {
 
   // 管理员统计数据
   const [adminStats, setAdminStats] = useState({});
-  
+
   // 管理员数据
-  const [employees, setEmployees] = useState([]);
   const [attendanceRecords, setAttendanceRecords] = useState([]);
-  const [departments, setDepartments] = useState([]);
   const [users, setUsers] = useState([]);
-  const [adminView, setAdminView] = useState('dashboard'); // dashboard, records, employees, departments, users
+  const [adminView, setAdminView] = useState('dashboard');
 
   // 用户管理相关状态
   const [showUserModal, setShowUserModal] = useState(false);
@@ -45,7 +43,7 @@ const AttendanceSystem = () => {
   const [checkinStatus, setCheckinStatus] = useState({ checked_in: false, checkin_time: null });
 
   // API 基础 URL
-  const API_BASE = process.env.REACT_APP_API_URL || 'https://attendance-api-q9qm.onrender.com/api';
+  const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
   // 获取存储的 token
   const getToken = () => localStorage.getItem('attendance_token');
@@ -72,16 +70,35 @@ const AttendanceSystem = () => {
     };
 
     try {
+      console.log(`API请求: ${API_BASE}${endpoint}`, config);
       const response = await fetch(`${API_BASE}${endpoint}`, config);
+
+      // 检查响应状态
+      if (response.status === 401 || response.status === 403) {
+        console.warn('认证失败，可能是Token过期');
+        setToken(null);
+        localStorage.removeItem('attendance_user');
+        setCurrentUser(null);
+        setCurrentView('login');
+        showMessage('登录已过期，请重新登录', 'warning');
+        throw new Error('认证失败，请重新登录');
+      }
+
       const data = await response.json();
+      console.log(`API响应: ${endpoint}`, data);
 
       if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}`);
+        throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
       }
 
       return data;
     } catch (error) {
-      console.error('API请求错误:', error);
+      console.error(`API请求错误 ${endpoint}:`, error);
+
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        throw new Error('无法连接到服务器，请检查后端是否正在运行');
+      }
+
       throw error;
     }
   };
@@ -111,9 +128,7 @@ const AttendanceSystem = () => {
     if (!token) return;
 
     try {
-      // 通过获取签到状态来验证 token
       await apiRequest('/checkin/status');
-      // 如果成功，获取用户信息（从 token 解析或通过 API）
       const userData = JSON.parse(localStorage.getItem('attendance_user'));
       if (userData) {
         setCurrentUser(userData);
@@ -147,20 +162,13 @@ const AttendanceSystem = () => {
       setAdminStats(data);
     } catch (error) {
       console.error('获取统计数据失败:', error);
+      setAdminStats({
+        total_employees: users.filter(u => u.role === 'employee').length,
+        checked_in_today: attendanceRecords.filter(r => r.check_date === new Date().toISOString().split('T')[0]).length,
+        attendance_rate: 0
+      });
     }
-  }, [currentUser]);
-
-  // 获取员工列表
-  const fetchEmployees = useCallback(async () => {
-    if (!currentUser || currentUser.role !== 'admin') return;
-
-    try {
-      const data = await apiRequest('/admin/employees');
-      setEmployees(data.employees);
-    } catch (error) {
-      console.error('获取员工列表失败:', error);
-    }
-  }, [currentUser]);
+  }, [currentUser, users, attendanceRecords]);
 
   // 获取考勤记录
   const fetchAttendanceRecords = useCallback(async () => {
@@ -168,21 +176,10 @@ const AttendanceSystem = () => {
 
     try {
       const data = await apiRequest('/admin/records');
-      setAttendanceRecords(data.records);
+      setAttendanceRecords(data.records || []);
     } catch (error) {
       console.error('获取考勤记录失败:', error);
-    }
-  }, [currentUser]);
-
-  // 获取部门统计
-  const fetchDepartments = useCallback(async () => {
-    if (!currentUser || currentUser.role !== 'admin') return;
-
-    try {
-      const data = await apiRequest('/admin/departments');
-      setDepartments(data.departments);
-    } catch (error) {
-      console.error('获取部门统计失败:', error);
+      setAttendanceRecords([]);
     }
   }, [currentUser]);
 
@@ -191,12 +188,79 @@ const AttendanceSystem = () => {
     if (!currentUser || currentUser.role !== 'admin') return;
 
     try {
+      setIsLoading(true);
+      // 优先使用管理员API
       const data = await apiRequest('/admin/users');
-      setUsers(data.users);
+      setUsers(data.users || []);
+
     } catch (error) {
-      console.error('获取用户列表失败:', error);
+      console.error('获取用户列表失败，尝试备用接口:', error);
+      // 备用：使用debug接口
+      try {
+        const data = await apiRequest('/debug/users');
+        const usersData = data.users || [];
+        const formattedUsers = usersData.map(user => ({
+          ...user,
+          allowed_ips: user.allowed_ips ? JSON.parse(user.allowed_ips) : []
+        }));
+        setUsers(formattedUsers);
+      } catch (backupError) {
+        console.error('备用接口也失败:', backupError);
+        setUsers([]);
+        showMessage('无法加载用户数据：' + backupError.message, 'error');
+      }
+    } finally {
+      setIsLoading(false);
     }
   }, [currentUser]);
+
+  // 删除用户
+  const deleteUser = async (userId, userName) => {
+    if (!window.confirm(`确定要删除用户"${userName}"吗？此操作不可撤销！`)) {
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      await apiRequest(`/admin/users/${userId}`, {
+        method: 'DELETE'
+      });
+      showMessage('用户删除成功', 'success');
+      fetchUsers(); // 刷新列表
+    } catch (error) {
+      showMessage(error.message, 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 编辑用户
+  const editUser = (user) => {
+    setEditingUser(user);
+    setUserForm({
+      username: user.username,
+      password: '', // 密码字段留空
+      role: user.role,
+      name: user.name,
+      department: user.department,
+      allowed_ips: Array.isArray(user.allowed_ips) ? user.allowed_ips : []
+    });
+    setShowUserModal(true);
+  };
+
+  // 新增用户
+  const addNewUser = () => {
+    setEditingUser(null);
+    setUserForm({
+      username: '',
+      password: '',
+      role: 'employee',
+      name: '',
+      department: '',
+      allowed_ips: [userIP] // 默认添加当前IP
+    });
+    setShowUserModal(true);
+  };
 
   // 创建或更新用户
   const handleUserSubmit = async (e) => {
@@ -240,225 +304,117 @@ const AttendanceSystem = () => {
     }
   };
 
-  // 删除用户
-  const deleteUser = async (userId, userName) => {
-    if (!window.confirm(`确定要删除用户"${userName}"吗？此操作不可撤销！`)) {
-      return;
-    }
-
+  // 导出考勤记录（Excel格式）
+  const exportAttendanceRecords = async () => {
     try {
-      await apiRequest(`/admin/users/${userId}`, {
-        method: 'DELETE'
-      });
-      showMessage('用户删除成功', 'success');
-      fetchUsers(); // 刷新列表
+      setIsLoading(true);
+      showMessage('正在导出Excel文件...', 'info');
+
+      const currentDate = new Date();
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth() + 1;
+
+      const data = await apiRequest(`/admin/export?year=${year}&month=${month}`);
+
+      // 构建Excel格式的文件
+      generateDesignInstituteExcel(data.data);
+      showMessage('Excel导出成功', 'success');
+
     } catch (error) {
-      showMessage(error.message, 'error');
+      console.error('导出失败:', error);
+      showMessage('导出失败：' + error.message, 'error');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // 编辑用户
-  const editUser = (user) => {
-    setEditingUser(user);
-    setUserForm({
-      username: user.username,
-      password: '', // 密码字段留空
-      role: user.role,
-      name: user.name,
-      department: user.department,
-      allowed_ips: user.allowed_ips
-    });
-    setShowUserModal(true);
-  };
+  // 生成Excel格式的文件
+  const generateDesignInstituteExcel = (exportData) => {
+    const { title, year, month, employees, days, records } = exportData;
 
-  // 新增用户
-  const addNewUser = () => {
-    setEditingUser(null);
-    setUserForm({
-      username: '',
-      password: '',
-      role: 'employee',
-      name: '',
-      department: '',
-      allowed_ips: [userIP] // 默认添加当前IP
-    });
-    setShowUserModal(true);
-  };
-
-  // 删除考勤记录
-  const deleteRecord = async (recordId) => {
-    try {
-      await apiRequest(`/admin/records/${recordId}`, {
-        method: 'DELETE'
-      });
-      showMessage('记录删除成功', 'success');
-      fetchAttendanceRecords(); // 刷新列表
-    } catch (error) {
-      showMessage(error.message, 'error');
-    }
-  };
-
-  // 导出考勤记录（设计院考勤表格式）
-  const exportRecords = () => {
-    if (attendanceRecords.length === 0) {
-      showMessage('暂无数据可导出', 'warning');
-      return;
-    }
-
-    // 获取当前月份
-    const now = new Date();
-    const currentMonth = now.getMonth() + 1;
-    const currentYear = now.getFullYear();
-
-    // 获取本月所有员工
-    const employeeNames = [...new Set(attendanceRecords.map(record => record.employee_name))];
-
-    // 获取本月天数
-    const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
-
-    // 构建设计院考勤表格式
-    const csvData = [];
+    // 构建Excel数据
+    const worksheetData = [];
 
     // 标题行
-    csvData.push(['乌兰察布项目公司考勤表']);
+    worksheetData.push([title]);
+    worksheetData.push([]); // 空行
 
-    // 表头：考勤月度、考勤日期、各员工姓名（每个员工两列：上午、下午）
-    const headerRow1 = ['考勤月度', '考勤日期'];
-    const headerRow2 = ['', ''];
-
-    employeeNames.forEach(name => {
-      headerRow1.push(name, ''); // 员工姓名占两列
-      headerRow2.push('上午', '下午'); // 第二行显示上午/下午
+    // 表头行：考勤月度、考勤日期、各员工姓名
+    const headerRow = ['考勤月度', '考勤日期'];
+    employees.forEach(name => {
+      headerRow.push(name);
     });
-
-    csvData.push(headerRow1);
-    csvData.push(headerRow2);
+    worksheetData.push(headerRow);
 
     // 按日期生成每一行
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const monthDayStr = `${currentMonth}月`;
+    for (let day = 1; day <= days; day++) {
+      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const monthStr = `${month}月`;
       const dayStr = `${day}日`;
 
-      // 每一行：月份、日期、各员工当天的签到时间
-      const row = [monthDayStr, dayStr];
+      const row = [monthStr, dayStr];
 
-      // 为每个员工添加当天的签到时间（上午、下午）
-      employeeNames.forEach(employeeName => {
-        const dayRecord = attendanceRecords.find(record =>
+      // 为每个员工添加当天的签到时间
+      employees.forEach(employeeName => {
+        const dayRecord = records.find(record =>
           record.employee_name === employeeName && record.check_date === dateStr
         );
 
         if (dayRecord) {
-          const checkTime = dayRecord.check_time;
-          const hour = parseInt(checkTime.split(':')[0]);
-
-          // 根据签到时间判断是上午还是下午
-          if (hour < 12) {
-            // 上午签到
-            row.push(checkTime, ''); // 上午有时间，下午空白
-          } else {
-            // 下午签到
-            row.push('', checkTime); // 上午空白，下午有时间
-          }
+          row.push(dayRecord.check_time);
         } else {
-          // 没有签到记录
-          row.push('', ''); // 上午下午都空白
+          row.push(''); // 未签到
         }
       });
 
-      csvData.push(row);
+      worksheetData.push(row);
     }
 
-    // 统计行
+    // 添加统计行
+    worksheetData.push([]); // 空行
+
     const attendanceRow = ['出勤天数', ''];
-    const leaveRow = ['请假天数', ''];
-    const absentRow = ['旷工天数', ''];
+    const absentRow = ['缺勤天数', ''];
 
-    employeeNames.forEach(name => {
-      const attendanceDays = attendanceRecords.filter(record => record.employee_name === name).length;
-      attendanceRow.push(attendanceDays, ''); // 出勤天数只显示在第一列
-      leaveRow.push('0', ''); // 请假天数
-      absentRow.push(daysInMonth - attendanceDays, ''); // 旷工天数
+    employees.forEach(name => {
+      const attendanceDays = records.filter(record => record.employee_name === name).length;
+      attendanceRow.push(attendanceDays);
+      absentRow.push(days - attendanceDays);
     });
 
-    csvData.push(attendanceRow);
-    csvData.push(leaveRow);
-    csvData.push(absentRow);
+    worksheetData.push(attendanceRow);
+    worksheetData.push(absentRow);
 
-    // 签名行
-    const signRow = ['项目负责人确认：', ''];
-    employeeNames.forEach(() => {
-      signRow.push('', '');
-    });
-    csvData.push(signRow);
+    // 签字行
+    worksheetData.push([]);
+    worksheetData.push(['项目负责人签字：', '', '日期：']);
 
-    // 转换为CSV格式
-    const csvContent = csvData.map(row =>
-      row.map(field => `"${field}"`).join(',')
-    ).join('\n');
+    // 转换为CSV格式（Excel可以正确打开）
+    const csvContent = worksheetData.map(row =>
+      row.map(field => {
+        // 处理包含逗号或换行的字段
+        if (typeof field === 'string' && (field.includes(',') || field.includes('\n') || field.includes('"'))) {
+          return `"${field.replace(/"/g, '""')}"`;
+        }
+        return field;
+      }).join(',')
+    ).join('\r\n');
 
     // 添加BOM以支持中文
     const BOM = '\uFEFF';
     const csvWithBOM = BOM + csvContent;
 
     // 创建下载
-    const blob = new Blob([csvWithBOM], { type: 'text/csv;charset=utf-8' });
+    const blob = new Blob([csvWithBOM], { type: 'application/vnd.ms-excel;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `乌兰察布项目公司考勤表_${currentYear}年${currentMonth}月.csv`;
+    link.download = `乌兰察布项目考勤表_${year}年${month}月.csv`;
+    link.style.display = 'none';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-
-    showMessage('设计院考勤表导出成功', 'success');
-  };
-
-  // 导出员工信息
-  const exportEmployees = () => {
-    if (employees.length === 0) {
-      showMessage('暂无员工数据可导出', 'warning');
-      return;
-    }
-
-    // 准备CSV数据
-    const headers = ['员工姓名', '用户名', '部门', '今日签到状态', '累计签到次数', '出勤天数', '授权IP'];
-    const csvData = [
-      headers,
-      ...employees.map(employee => [
-        employee.name,
-        employee.username,
-        employee.department,
-        employee.checked_today ? '已签到' : '未签到',
-        employee.total_checkins,
-        employee.days_attended,
-        employee.allowed_ips.join('; ')
-      ])
-    ];
-
-    // 转换为CSV格式
-    const csvContent = csvData.map(row =>
-      row.map(field => `"${field}"`).join(',')
-    ).join('\n');
-
-    // 添加BOM以支持中文
-    const BOM = '\uFEFF';
-    const csvWithBOM = BOM + csvContent;
-
-    // 创建下载
-    const blob = new Blob([csvWithBOM], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `员工信息_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '-')}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    showMessage('员工信息导出成功', 'success');
   };
 
   useEffect(() => {
@@ -473,11 +429,14 @@ const AttendanceSystem = () => {
   }, [fetchUserIP, validateToken]);
 
   useEffect(() => {
-    fetchCheckinStatus();
-    fetchAdminStats();
-    fetchAttendanceRecords();
-    fetchUsers();
-  }, [fetchCheckinStatus, fetchAdminStats, fetchAttendanceRecords, fetchUsers]);
+    if (currentUser && currentUser.role === 'admin') {
+      fetchUsers();
+      fetchAdminStats();
+      fetchAttendanceRecords();
+    } else if (currentUser) {
+      fetchCheckinStatus();
+    }
+  }, [currentUser]);
 
   // CSS样式
   const styles = {
@@ -583,13 +542,15 @@ const AttendanceSystem = () => {
   const showMessage = (text, type = 'info') => {
     setMessage(text);
     setMessageType(type);
-    setTimeout(() => setMessage(''), 3000);
+    setTimeout(() => setMessage(''), 5000);
   };
 
   // 处理登录
   const handleLogin = async () => {
     try {
       setIsLoading(true);
+      console.log('尝试登录:', loginForm.username, API_BASE);
+
       const data = await apiRequest('/login', {
         method: 'POST',
         body: JSON.stringify(loginForm),
@@ -642,6 +603,26 @@ const AttendanceSystem = () => {
     }
   };
 
+  // 测试连接功能
+  const testConnection = async () => {
+    try {
+      setIsLoading(true);
+      showMessage('正在测试连接...', 'info');
+
+      const ipData = await apiRequest('/ip');
+      console.log('IP测试成功:', ipData);
+
+      const userData = await apiRequest('/debug/users');
+      console.log('用户数据测试成功:', userData);
+
+      showMessage(`连接测试成功！发现 ${userData.users.length} 个用户`, 'success');
+    } catch (error) {
+      showMessage(`连接测试失败: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // 登录页面
   if (currentView === 'login') {
     return (
@@ -661,7 +642,7 @@ const AttendanceSystem = () => {
                 <Lock size={32} color="white" />
               </div>
               <h1 style={{fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937', marginBottom: '0.5rem'}}>
-                乌兰察布项目公司签到系统
+                考勤系统
               </h1>
               <p style={{color: '#6b7280', marginTop: '0.5rem'}}>请使用授权账号登录</p>
             </div>
@@ -745,7 +726,7 @@ const AttendanceSystem = () => {
                 value={loginForm.username}
                 onChange={(e) => setLoginForm(prev => ({ ...prev, username: e.target.value }))}
                 style={styles.input}
-                placeholder="请输入用户名"
+                placeholder="请输入用户名 (如: admin)"
               />
             </div>
 
@@ -759,16 +740,16 @@ const AttendanceSystem = () => {
                 onChange={(e) => setLoginForm(prev => ({ ...prev, password: e.target.value }))}
                 style={styles.input}
                 placeholder="请输入密码"
-                onKeyPress={(e) => e.key === 'Enter' && !isLoading && userIP && handleLogin()}
+                onKeyPress={(e) => e.key === 'Enter' && !isLoading && handleLogin()}
               />
             </div>
 
             <button
               onClick={handleLogin}
               style={{...styles.button, width: '100%', marginBottom: '1rem', justifyContent: 'center'}}
-              disabled={isLoading || !userIP}
+              disabled={isLoading}
             >
-              {isLoading ? '登录中...' : !userIP ? 'IP检测中，请稍候...' : '安全登录'}
+              {isLoading ? '登录中...' : '登录'}
             </button>
 
             {message && (
@@ -790,12 +771,6 @@ const AttendanceSystem = () => {
                 100% { transform: rotate(360deg); }
               }
             `}</style>
-
-            <div style={{marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid #e5e7eb', textAlign: 'center'}}>
-              <p style={{fontSize: '0.75rem', color: '#6b7280'}}>
-                系统通过服务器检测本机IP地址进行身份验证
-              </p>
-            </div>
           </div>
         </div>
       </div>
@@ -879,18 +854,6 @@ const AttendanceSystem = () => {
               {isLoading ? '签到中...' : checkinStatus.checked_in ? '今日已签到' : '立即签到'}
             </button>
 
-            {message && (
-              <div style={{
-                marginTop: '1rem',
-                padding: '1rem',
-                borderRadius: '0.375rem',
-                ...(messageType === 'success' ? styles.messageSuccess :
-                   messageType === 'error' ? styles.messageError : styles.messageWarning)
-              }}>
-                {message}
-              </div>
-            )}
-
             <div style={{marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid #e5e7eb'}}>
               <div style={{...styles.flexCenter, fontSize: '0.875rem', gap: '1rem', marginBottom: '1rem'}}>
                 <div style={{color: '#6b7280'}}>今日状态：</div>
@@ -906,6 +869,16 @@ const AttendanceSystem = () => {
               </div>
             </div>
           </div>
+
+          {message && (
+            <div style={{
+              ...styles.card,
+              ...(messageType === 'success' ? styles.messageSuccess :
+                 messageType === 'error' ? styles.messageError : styles.messageWarning)
+            }}>
+              {message}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -916,7 +889,6 @@ const AttendanceSystem = () => {
     return (
       <div style={styles.container}>
         <div style={{maxWidth: '1400px', margin: '0 auto'}}>
-          {/* 头部导航 */}
           <div style={styles.card}>
             <div style={{...styles.flexBetween, marginBottom: '1rem'}}>
               <div style={{display: 'flex', alignItems: 'center'}}>
@@ -941,12 +913,11 @@ const AttendanceSystem = () => {
               </button>
             </div>
 
-            {/* 导航标签 */}
             <div style={{display: 'flex', gap: '1rem', borderBottom: '1px solid #e5e7eb', paddingBottom: '1rem'}}>
               {[
                 { key: 'dashboard', label: '数据概览', icon: '📊' },
                 { key: 'records', label: '考勤记录', icon: '📋' },
-                { key: 'users', label: '账号管理', icon: '⚙️' }
+                { key: 'users', label: '用户管理', icon: '👥' }
               ].map(tab => (
                 <button
                   key={tab.key}
@@ -965,65 +936,62 @@ const AttendanceSystem = () => {
             </div>
           </div>
 
-          {/* 数据概览 */}
           {adminView === 'dashboard' && (
-            <>
-              <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem'}}>
-                <div style={{backgroundColor: '#f8fafc', padding: '1.5rem', borderRadius: '0.5rem', border: '1px solid #e2e8f0'}}>
-                  <div style={{display: 'flex', alignItems: 'center', marginBottom: '0.5rem'}}>
-                    <Users size={20} color="#64748b" />
-                    <span style={{fontSize: '0.875rem', color: '#6b7280', marginLeft: '0.5rem'}}>总员工数</span>
-                  </div>
-                  <p style={{fontSize: '2rem', fontWeight: 'bold', color: '#1f2937', margin: 0}}>
-                    {adminStats.total_employees || 0}
-                  </p>
+            <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem'}}>
+              <div style={{backgroundColor: '#f8fafc', padding: '1.5rem', borderRadius: '0.5rem', border: '1px solid #e2e8f0'}}>
+                <div style={{display: 'flex', alignItems: 'center', marginBottom: '0.5rem'}}>
+                  <Users size={20} color="#64748b" />
+                  <span style={{fontSize: '0.875rem', color: '#6b7280', marginLeft: '0.5rem'}}>总员工数</span>
                 </div>
-                <div style={{backgroundColor: '#f0fdf4', padding: '1.5rem', borderRadius: '0.5rem', border: '1px solid #bbf7d0'}}>
-                  <div style={{display: 'flex', alignItems: 'center', marginBottom: '0.5rem'}}>
-                    <CheckCircle2 size={20} color="#22c55e" />
-                    <span style={{fontSize: '0.875rem', color: '#6b7280', marginLeft: '0.5rem'}}>今日签到</span>
-                  </div>
-                  <p style={{fontSize: '2rem', fontWeight: 'bold', color: '#10b981', margin: 0}}>
-                    {adminStats.checked_in_today || 0}
-                  </p>
-                </div>
-                <div style={{backgroundColor: '#fdf4ff', padding: '1.5rem', borderRadius: '0.5rem', border: '1px solid #e879f9'}}>
-                  <div style={{display: 'flex', alignItems: 'center', marginBottom: '0.5rem'}}>
-                    <span style={{fontSize: '1.25rem'}}>📈</span>
-                    <span style={{fontSize: '0.875rem', color: '#6b7280', marginLeft: '0.5rem'}}>签到率</span>
-                  </div>
-                  <p style={{fontSize: '2rem', fontWeight: 'bold', color: '#7c3aed', margin: 0}}>
-                    {adminStats.attendance_rate || 0}%
-                  </p>
-                </div>
-                <div style={{backgroundColor: '#fff7ed', padding: '1.5rem', borderRadius: '0.5rem', border: '1px solid #fed7aa'}}>
-                  <div style={{display: 'flex', alignItems: 'center', marginBottom: '0.5rem'}}>
-                    <Calendar size={20} color="#ea580c" />
-                    <span style={{fontSize: '0.875rem', color: '#6b7280', marginLeft: '0.5rem'}}>今日日期</span>
-                  </div>
-                  <p style={{fontSize: '1rem', fontWeight: 'bold', color: '#ea580c', margin: 0}}>
-                    {new Date().toLocaleDateString('zh-CN')}
-                  </p>
-                </div>
+                <p style={{fontSize: '2rem', fontWeight: 'bold', color: '#1f2937', margin: 0}}>
+                  {users.filter(u => u.role === 'employee').length || 0}
+                </p>
               </div>
-            </>
+              <div style={{backgroundColor: '#f0fdf4', padding: '1.5rem', borderRadius: '0.5rem', border: '1px solid #bbf7d0'}}>
+                <div style={{display: 'flex', alignItems: 'center', marginBottom: '0.5rem'}}>
+                  <CheckCircle2 size={20} color="#22c55e" />
+                  <span style={{fontSize: '0.875rem', color: '#6b7280', marginLeft: '0.5rem'}}>今日签到</span>
+                </div>
+                <p style={{fontSize: '2rem', fontWeight: 'bold', color: '#10b981', margin: 0}}>
+                  {adminStats.checked_in_today || 0}
+                </p>
+              </div>
+              <div style={{backgroundColor: '#fdf4ff', padding: '1.5rem', borderRadius: '0.5rem', border: '1px solid #e879f9'}}>
+                <div style={{display: 'flex', alignItems: 'center', marginBottom: '0.5rem'}}>
+                  <span style={{fontSize: '1.25rem'}}>📈</span>
+                  <span style={{fontSize: '0.875rem', color: '#6b7280', marginLeft: '0.5rem'}}>签到率</span>
+                </div>
+                <p style={{fontSize: '2rem', fontWeight: 'bold', color: '#7c3aed', margin: 0}}>
+                  {adminStats.attendance_rate || 0}%
+                </p>
+              </div>
+              <div style={{backgroundColor: '#fff7ed', padding: '1.5rem', borderRadius: '0.5rem', border: '1px solid #fed7aa'}}>
+                <div style={{display: 'flex', alignItems: 'center', marginBottom: '0.5rem'}}>
+                  <Calendar size={20} color="#ea580c" />
+                  <span style={{fontSize: '0.875rem', color: '#6b7280', marginLeft: '0.5rem'}}>今日日期</span>
+                </div>
+                <p style={{fontSize: '1rem', fontWeight: 'bold', color: '#ea580c', margin: 0}}>
+                  {new Date().toLocaleDateString('zh-CN')}
+                </p>
+              </div>
+            </div>
           )}
 
-          {/* 考勤记录 */}
           {adminView === 'records' && (
             <div style={styles.card}>
               <div style={{...styles.flexBetween, marginBottom: '1rem'}}>
                 <h3 style={{fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', margin: 0}}>考勤记录</h3>
                 <div style={{display: 'flex', gap: '0.5rem'}}>
                   <button
-                    onClick={exportRecords}
+                    onClick={exportAttendanceRecords}
                     style={{
                       ...styles.button,
                       backgroundColor: '#059669'
                     }}
+                    disabled={isLoading}
                   >
-                    <span style={{fontSize: '1rem'}}>📥</span>
-                    导出Excel
+                    <span style={{fontSize: '1rem'}}>📊</span>
+                    {isLoading ? '导出中...' : '导出Excel'}
                   </button>
                   <button onClick={fetchAttendanceRecords} style={styles.button}>
                     <RefreshCw size={16} />
@@ -1041,41 +1009,23 @@ const AttendanceSystem = () => {
                       <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>签到日期</th>
                       <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>签到时间</th>
                       <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>IP地址</th>
-                      <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {attendanceRecords.length === 0 ? (
                       <tr>
-                        <td colSpan="6" style={{padding: '2rem', textAlign: 'center', color: '#6b7280'}}>
+                        <td colSpan="5" style={{padding: '2rem', textAlign: 'center', color: '#6b7280'}}>
                           暂无考勤记录
                         </td>
                       </tr>
                     ) : (
-                      attendanceRecords.map(record => (
-                        <tr key={record.id} style={{borderBottom: '1px solid #f3f4f6'}}>
+                      attendanceRecords.map((record, index) => (
+                        <tr key={record.id || index} style={{borderBottom: '1px solid #f3f4f6'}}>
                           <td style={{padding: '0.75rem', fontSize: '0.875rem', color: '#1f2937'}}>{record.employee_name}</td>
                           <td style={{padding: '0.75rem', fontSize: '0.875rem', color: '#6b7280'}}>{record.department}</td>
                           <td style={{padding: '0.75rem', fontSize: '0.875rem', color: '#6b7280'}}>{record.check_date}</td>
                           <td style={{padding: '0.75rem', fontSize: '0.875rem', color: '#6b7280'}}>{record.check_time}</td>
                           <td style={{padding: '0.75rem', fontSize: '0.75rem', fontFamily: 'monospace', color: '#6b7280'}}>{record.ip_address}</td>
-                          <td style={{padding: '0.75rem'}}>
-                            <button
-                              onClick={() => {
-                                if (window.confirm('确定要删除这条记录吗？')) {
-                                  deleteRecord(record.id);
-                                }
-                              }}
-                              style={{
-                                ...styles.buttonSmall,
-                                backgroundColor: '#dc2626',
-                                fontSize: '0.75rem'
-                              }}
-                            >
-                              <XCircle size={12} />
-                              删除
-                            </button>
-                          </td>
                         </tr>
                       ))
                     )}
@@ -1085,11 +1035,10 @@ const AttendanceSystem = () => {
             </div>
           )}
 
-          {/* 账号管理 */}
           {adminView === 'users' && (
             <div style={styles.card}>
               <div style={{...styles.flexBetween, marginBottom: '1rem'}}>
-                <h3 style={{fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', margin: 0}}>账号管理</h3>
+                <h3 style={{fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937', margin: 0}}>用户管理</h3>
                 <div style={{display: 'flex', gap: '0.5rem'}}>
                   <button
                     onClick={addNewUser}
@@ -1101,36 +1050,59 @@ const AttendanceSystem = () => {
                     <span style={{fontSize: '1rem'}}>➕</span>
                     新增用户
                   </button>
-                  <button onClick={fetchUsers} style={styles.button}>
+                  <button
+                    onClick={fetchUsers}
+                    style={styles.button}
+                    disabled={isLoading}
+                  >
                     <RefreshCw size={16} />
-                    刷新
+                    {isLoading ? '加载中...' : '刷新用户列表'}
                   </button>
                 </div>
               </div>
 
-              <div style={{overflowX: 'auto'}}>
-                <table style={{width: '100%', borderCollapse: 'collapse'}}>
-                  <thead>
-                    <tr style={{backgroundColor: '#f9fafb', borderBottom: '1px solid #e5e7eb'}}>
-                      <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>用户名</th>
-                      <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>姓名</th>
-                      <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>部门</th>
-                      <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>角色</th>
-                      <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>授权IP</th>
-                      <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.length === 0 ? (
-                      <tr>
-                        <td colSpan="6" style={{padding: '2rem', textAlign: 'center', color: '#6b7280'}}>
-                          暂无用户数据
-                        </td>
+              {users.length === 0 ? (
+                <div style={{
+                  padding: '3rem',
+                  textAlign: 'center',
+                  backgroundColor: '#f9fafb',
+                  borderRadius: '0.5rem',
+                  border: '2px dashed #d1d5db'
+                }}>
+                  <Users size={48} color="#9ca3af" style={{margin: '0 auto 1rem'}} />
+                  <h3 style={{fontSize: '1.125rem', fontWeight: '600', color: '#374151', marginBottom: '0.5rem'}}>
+                    无法加载用户数据
+                  </h3>
+                  <p style={{color: '#6b7280', marginBottom: '1rem'}}>
+                    请检查后端连接或点击刷新重试
+                  </p>
+                  <button
+                    onClick={fetchUsers}
+                    style={{...styles.button, backgroundColor: '#059669'}}
+                  >
+                    <RefreshCw size={16} />
+                    重新加载
+                  </button>
+                </div>
+              ) : (
+                <div style={{overflowX: 'auto'}}>
+                  <table style={{width: '100%', borderCollapse: 'collapse'}}>
+                    <thead>
+                      <tr style={{backgroundColor: '#f9fafb', borderBottom: '1px solid #e5e7eb'}}>
+                        <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>ID</th>
+                        <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>用户名</th>
+                        <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>姓名</th>
+                        <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>部门</th>
+                        <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>角色</th>
+                        <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>授权IP</th>
+                        <th style={{padding: '0.75rem', textAlign: 'left', fontSize: '0.875rem', fontWeight: '600', color: '#374151'}}>操作</th>
                       </tr>
-                    ) : (
-                      users.map(user => (
-                        <tr key={user.id} style={{borderBottom: '1px solid #f3f4f6'}}>
-                          <td style={{padding: '0.75rem', fontSize: '0.875rem', color: '#1f2937', fontFamily: 'monospace'}}>{user.username}</td>
+                    </thead>
+                    <tbody>
+                      {users.map((user, index) => (
+                        <tr key={user.id || index} style={{borderBottom: '1px solid #f3f4f6'}}>
+                          <td style={{padding: '0.75rem', fontSize: '0.875rem', color: '#6b7280', fontFamily: 'monospace'}}>{user.id}</td>
+                          <td style={{padding: '0.75rem', fontSize: '0.875rem', color: '#1f2937', fontFamily: 'monospace', fontWeight: '600'}}>{user.username}</td>
                           <td style={{padding: '0.75rem', fontSize: '0.875rem', color: '#1f2937'}}>{user.name}</td>
                           <td style={{padding: '0.75rem', fontSize: '0.875rem', color: '#6b7280'}}>{user.department}</td>
                           <td style={{padding: '0.75rem'}}>
@@ -1142,7 +1114,7 @@ const AttendanceSystem = () => {
                             </span>
                           </td>
                           <td style={{padding: '0.75rem', fontSize: '0.75rem', fontFamily: 'monospace', color: '#6b7280'}}>
-                            {user.allowed_ips.join(', ')}
+                            {Array.isArray(user.allowed_ips) ? user.allowed_ips.join(', ') : user.allowed_ips}
                           </td>
                           <td style={{padding: '0.75rem'}}>
                             <div style={{display: 'flex', gap: '0.25rem'}}>
@@ -1172,11 +1144,11 @@ const AttendanceSystem = () => {
                             </div>
                           </td>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
               {/* 用户编辑/新增模态框 */}
               {showUserModal && (
@@ -1217,6 +1189,7 @@ const AttendanceSystem = () => {
                           style={styles.input}
                           placeholder="请输入用户名"
                           required
+                          disabled={isLoading}
                         />
                       </div>
 
@@ -1231,6 +1204,7 @@ const AttendanceSystem = () => {
                           style={styles.input}
                           placeholder={editingUser ? "留空则不修改密码" : "请输入密码"}
                           required={!editingUser}
+                          disabled={isLoading}
                         />
                       </div>
 
@@ -1245,6 +1219,7 @@ const AttendanceSystem = () => {
                           style={styles.input}
                           placeholder="请输入真实姓名"
                           required
+                          disabled={isLoading}
                         />
                       </div>
 
@@ -1259,6 +1234,7 @@ const AttendanceSystem = () => {
                           style={styles.input}
                           placeholder="请输入部门名称"
                           required
+                          disabled={isLoading}
                         />
                       </div>
 
@@ -1270,6 +1246,7 @@ const AttendanceSystem = () => {
                           value={userForm.role}
                           onChange={(e) => setUserForm(prev => ({ ...prev, role: e.target.value }))}
                           style={styles.input}
+                          disabled={isLoading}
                         >
                           <option value="employee">员工</option>
                           <option value="admin">管理员</option>
@@ -1278,7 +1255,7 @@ const AttendanceSystem = () => {
 
                       <div style={{marginBottom: '1rem'}}>
                         <label style={{display: 'block', fontSize: '0.875rem', fontWeight: '500', color: '#374151', marginBottom: '0.5rem'}}>
-                          授权IP地址 (多个IP用逗号分隔)
+                          授权IP地址 (多个IP用逗号分隔，使用 * 允许所有IP)
                         </label>
                         <input
                           type="text"
@@ -1288,8 +1265,12 @@ const AttendanceSystem = () => {
                             allowed_ips: e.target.value.split(',').map(ip => ip.trim()).filter(ip => ip)
                           }))}
                           style={styles.input}
-                          placeholder="192.168.1.100, 192.168.1.101"
+                          placeholder="192.168.1.100, 192.168.1.101 或 *"
+                          disabled={isLoading}
                         />
+                        <div style={{fontSize: '0.75rem', color: '#6b7280', marginTop: '0.25rem'}}>
+                          当前检测到的IP: {userIP}
+                        </div>
                       </div>
 
                       <div style={{display: 'flex', gap: '0.5rem', justifyContent: 'flex-end'}}>
@@ -1303,6 +1284,7 @@ const AttendanceSystem = () => {
                             ...styles.button,
                             backgroundColor: '#6b7280'
                           }}
+                          disabled={isLoading}
                         >
                           取消
                         </button>
@@ -1321,10 +1303,32 @@ const AttendanceSystem = () => {
                   </div>
                 </div>
               )}
+
+              <div style={{
+                marginTop: '1.5rem',
+                padding: '1rem',
+                backgroundColor: '#f0f9ff',
+                borderRadius: '0.5rem',
+                border: '1px solid #0ea5e9'
+              }}>
+                <h4 style={{fontSize: '0.875rem', fontWeight: '600', color: '#0369a1', marginBottom: '0.5rem'}}>
+                  用户管理说明
+                </h4>
+                <div style={{fontSize: '0.75rem', color: '#0369a1'}}>
+                  <p style={{margin: '0 0 0.5rem 0'}}>
+                    • 可以创建新用户或编辑现有用户信息
+                  </p>
+                  <p style={{margin: '0 0 0.5rem 0'}}>
+                    • 授权IP支持多个地址，用逗号分隔
+                  </p>
+                  <p style={{margin: '0'}}>
+                    • 使用 * 可允许用户从任意IP地址登录
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
-          {/* 消息提示 */}
           {message && (
             <div style={{
               position: 'fixed',
@@ -1333,6 +1337,7 @@ const AttendanceSystem = () => {
               padding: '1rem',
               borderRadius: '0.375rem',
               zIndex: 1000,
+              maxWidth: '400px',
               ...(messageType === 'success' ? styles.messageSuccess :
                  messageType === 'error' ? styles.messageError : styles.messageWarning)
             }}>
