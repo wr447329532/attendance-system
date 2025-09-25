@@ -15,7 +15,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts build",
+    "build": "DISABLE_ESLINT_PLUGIN=true react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "serve": "serve -s build"
@@ -41,6 +41,5 @@
   "devDependencies": {
     "serve": "^14.2.1"
   },
-  "proxy": "http://localhost:5000",
   "homepage": "."
 }

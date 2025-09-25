@@ -45,7 +45,7 @@ const AttendanceSystem = () => {
   const [checkinStatus, setCheckinStatus] = useState({ checked_in: false, checkin_time: null });
 
   // API 基础 URL
-  const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+  const API_BASE = process.env.REACT_APP_API_URL || 'https://attendance-api-q9qm.onrender.com/api';
 
   // 获取存储的 token
   const getToken = () => localStorage.getItem('attendance_token');
