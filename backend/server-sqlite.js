@@ -1,6 +1,15 @@
 const express = require('express');
 const Database = require('better-sqlite3');
-const bcrypt = require('bcrypt');
+//const bcrypt = require('bcrypt');
+// 添加简单的密码处理函数
+function hashPassword(password) {
+  // 简单的Base64编码（仅用于演示）
+  return Buffer.from(password).toString('base64');
+}
+
+function verifyPassword(password, hash) {
+  return hashPassword(password) === hash;
+}
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const path = require('path');
@@ -115,7 +124,7 @@ function createTables() {
 }
 
 // 插入默认数据
-async function insertDefaultData() {
+function insertDefaultData() {
   try {
     const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();
 
@@ -134,7 +143,7 @@ async function insertDefaultData() {
     const defaultUsers = [
       {
         username: 'admin',
-        password: await bcrypt.hash('admin123', 10),
+        password: hashPassword('admin123'), // 使用新的密码哈希函数
         role: 'admin',
         name: '系统管理员',
         department: '管理部',
@@ -142,7 +151,7 @@ async function insertDefaultData() {
       },
       {
         username: 'zhangsan',
-        password: await bcrypt.hash('123456', 10),
+        password: hashPassword('123456'), // 使用新的密码哈希函数
         role: 'employee',
         name: '张三',
         department: '设计部',
@@ -150,7 +159,7 @@ async function insertDefaultData() {
       },
       {
         username: 'lisi',
-        password: await bcrypt.hash('123456', 10),
+        password: hashPassword('123456'), // 使用新的密码哈希函数
         role: 'employee',
         name: '李四',
         department: '工程部',
@@ -232,7 +241,7 @@ app.get('/api/ip', (req, res) => {
 });
 
 // 用户登录
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', (req, res) => {
   try {
     const { username, password } = req.body;
     const clientIp = req.clientIp;
@@ -246,7 +255,8 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: '用户名或密码错误' });
     }
 
-    const isValidPassword = await bcrypt.compare(password, user.password);
+    // 使用新的密码验证函数
+    const isValidPassword = verifyPassword(password, user.password);
     if (!isValidPassword) {
       return res.status(401).json({ error: '用户名或密码错误' });
     }
@@ -560,7 +570,7 @@ app.get('/api/admin/users', authenticateToken, (req, res) => {
 });
 
 // 管理员 - 创建新用户
-app.post('/api/admin/users', authenticateToken, async (req, res) => {
+app.post('/api/admin/users', authenticateToken, (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: '权限不足' });
   }
@@ -579,8 +589,8 @@ app.post('/api/admin/users', authenticateToken, async (req, res) => {
       return res.status(409).json({ error: '用户名已存在' });
     }
 
-    // 加密密码
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // 加密密码 - 使用新的密码哈希函数
+    const hashedPassword = hashPassword(password);
 
     // 插入新用户
     const insertUser = db.prepare(`
@@ -608,7 +618,7 @@ app.post('/api/admin/users', authenticateToken, async (req, res) => {
 });
 
 // 管理员 - 更新用户
-app.put('/api/admin/users/:id', authenticateToken, async (req, res) => {
+app.put('/api/admin/users/:id', authenticateToken, (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: '权限不足' });
   }
@@ -641,7 +651,7 @@ app.put('/api/admin/users/:id', authenticateToken, async (req, res) => {
     }
     if (password) {
       updateFields.push('password = ?');
-      updateValues.push(await bcrypt.hash(password, 10));
+      updateValues.push(hashPassword(password)); // 使用新的密码哈希函数
     }
     if (role) {
       updateFields.push('role = ?');
