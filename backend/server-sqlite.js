@@ -182,7 +182,7 @@ async function insertDefaultData() {
         role: 'admin',
         name: '系统管理员',
         department: '管理部',
-        allowed_ips: JSON.stringify(['192.168.220.1', '192.168.110.100', '127.0.0.1', '::1', realIP])
+        allowed_ips: JSON.stringify(['*', realIP])
       },
       {
         username: 'zhangsan',
