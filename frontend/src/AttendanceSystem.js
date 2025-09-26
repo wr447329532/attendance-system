@@ -43,7 +43,7 @@ const AttendanceSystem = () => {
   const [checkinStatus, setCheckinStatus] = useState({ checked_in: false, checkin_time: null });
 
   // API 基础 URL
-  const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+  const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
   // 获取存储的 token
   const getToken = () => localStorage.getItem('attendance_token');
@@ -109,7 +109,7 @@ const AttendanceSystem = () => {
     setIpStatus('正在从服务器获取本机IP地址...');
 
     try {
-      const data = await apiRequest('/ip');
+      const data = await apiRequest('/api/ip');
       setUserIP(data.ip);
       setIpStatus(`服务器检测到IP: ${data.ip}`);
       console.log('[IP检测] 服务器获取成功:', data.ip);
@@ -128,7 +128,7 @@ const AttendanceSystem = () => {
     if (!token) return;
 
     try {
-      await apiRequest('/checkin/status');
+      await apiRequest('/api/checkin/status');
       const userData = JSON.parse(localStorage.getItem('attendance_user'));
       if (userData) {
         setCurrentUser(userData);
@@ -146,7 +146,7 @@ const AttendanceSystem = () => {
     if (!currentUser || currentUser.role === 'admin') return;
 
     try {
-      const data = await apiRequest('/checkin/status');
+      const data = await apiRequest('/api/checkin/status');
       setCheckinStatus(data);
     } catch (error) {
       console.error('获取签到状态失败:', error);
@@ -158,7 +158,7 @@ const AttendanceSystem = () => {
     if (!currentUser || currentUser.role !== 'admin') return;
 
     try {
-      const data = await apiRequest('/admin/stats');
+      const data = await apiRequest('/api/admin/stats');
       setAdminStats(data);
     } catch (error) {
       console.error('获取统计数据失败:', error);
@@ -175,7 +175,7 @@ const AttendanceSystem = () => {
     if (!currentUser || currentUser.role !== 'admin') return;
 
     try {
-      const data = await apiRequest('/admin/records');
+      const data = await apiRequest('/api/admin/records');
       setAttendanceRecords(data.records || []);
     } catch (error) {
       console.error('获取考勤记录失败:', error);
@@ -190,14 +190,14 @@ const AttendanceSystem = () => {
     try {
       setIsLoading(true);
       // 优先使用管理员API
-      const data = await apiRequest('/admin/users');
+      const data = await apiRequest('/api/admin/users');
       setUsers(data.users || []);
 
     } catch (error) {
       console.error('获取用户列表失败，尝试备用接口:', error);
       // 备用：使用debug接口
       try {
-        const data = await apiRequest('/debug/users');
+        const data = await apiRequest('/api/debug/users');
         const usersData = data.users || [];
         const formattedUsers = usersData.map(user => ({
           ...user,
@@ -278,7 +278,7 @@ const AttendanceSystem = () => {
         showMessage('用户更新成功', 'success');
       } else {
         // 创建新用户
-        await apiRequest('/admin/users', {
+        await apiRequest('/api/admin/users', {
           method: 'POST',
           body: JSON.stringify(userForm)
         });
@@ -551,7 +551,7 @@ const AttendanceSystem = () => {
       setIsLoading(true);
       console.log('尝试登录:', loginForm.username, API_BASE);
 
-      const data = await apiRequest('/login', {
+      const data = await apiRequest('/api/login', {
         method: 'POST',
         body: JSON.stringify(loginForm),
       });
@@ -582,7 +582,7 @@ const AttendanceSystem = () => {
   const handleCheckIn = async () => {
     try {
       setIsLoading(true);
-      const data = await apiRequest('/checkin', {
+      const data = await apiRequest('/api/checkin', {
         method: 'POST',
       });
 
@@ -609,10 +609,10 @@ const AttendanceSystem = () => {
       setIsLoading(true);
       showMessage('正在测试连接...', 'info');
 
-      const ipData = await apiRequest('/ip');
+      const ipData = await apiRequest('/api/ip');
       console.log('IP测试成功:', ipData);
 
-      const userData = await apiRequest('/debug/users');
+      const userData = await apiRequest('/api/debug/users');
       console.log('用户数据测试成功:', userData);
 
       showMessage(`连接测试成功！发现 ${userData.users.length} 个用户`, 'success');
