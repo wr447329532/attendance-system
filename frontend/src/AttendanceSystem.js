@@ -222,7 +222,7 @@ const AttendanceSystem = () => {
 
     try {
       setIsLoading(true);
-      await apiRequest(`/admin/users/${userId}`, {
+      await apiRequest(`/api/admin/users/${userId}`, {
         method: 'DELETE'
       });
       showMessage('用户删除成功', 'success');
@@ -271,7 +271,7 @@ const AttendanceSystem = () => {
 
       if (editingUser) {
         // 更新用户
-        await apiRequest(`/admin/users/${editingUser.id}`, {
+        await apiRequest(`/api/admin/users/${editingUser.id}`, {
           method: 'PUT',
           body: JSON.stringify(userForm)
         });
@@ -314,7 +314,7 @@ const AttendanceSystem = () => {
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth() + 1;
 
-      const data = await apiRequest(`/admin/export?year=${year}&month=${month}`);
+      const data = await apiRequest(`/api/admin/export?year=${year}&month=${month}`);
 
       // 构建Excel格式的文件
       generateDesignInstituteExcel(data.data);
