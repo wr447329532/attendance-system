@@ -955,4 +955,19 @@ async function startServer() {
   }
 }
 
+// 临时紧急修复接口 - 用完记得删除
+app.post('/api/emergency/fix-ip', (req, res) => {
+  const { secret } = req.body;
+  if (secret !== 'fix-ip-2024') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  try {
+    db.exec('UPDATE users SET allowed_ips = \'["*"]\' WHERE 1=1');
+    saveDatabase();
+    res.json({ message: '✅ 所有用户IP已修复为通配符' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 startServer();
